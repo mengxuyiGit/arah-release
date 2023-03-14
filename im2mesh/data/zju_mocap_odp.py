@@ -34,7 +34,6 @@ class ZJUMOCAPODPDataset(data.Dataset):
                  views=[],
                  box_margin=0.05):
         ''' Initialization of the ZJU-MoCap with out-of-distribution poses dataset.
-
         Args:
             dataset_folder (str): dataset folder
             subjects (list of strs): which subjects to use
@@ -98,6 +97,7 @@ class ZJUMOCAPODPDataset(data.Dataset):
 
             model_files = sorted(glob.glob(os.path.join(subject_dir, pose_dir, '*.npz')))
             frames = np.arange(len(model_files)).tolist()
+            print("len(model_files)",len(model_files))
             if end_frame > 0:
                 model_files = sorted(glob.glob(os.path.join(subject_dir, pose_dir, '*.npz')))[start_frame:end_frame:sampling_rate]
                 frames = frames[start_frame:end_frame:sampling_rate]
@@ -196,7 +196,6 @@ class ZJUMOCAPODPDataset(data.Dataset):
 
     def __getitem__(self, idx):
         ''' Returns an item of the dataset.
-
         Args:
             idx (int): ID of data point
         '''

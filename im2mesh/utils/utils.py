@@ -1,6 +1,8 @@
 import torch
 import cv2
 import numpy as np
+import trimesh
+import os
 
 def get_params_by_key(model, key, exclude=False):
     if exclude:
@@ -267,3 +269,17 @@ def get_02v_bone_transforms(Jtr, rot45p, rot45n):
     bone_transforms_02v[chain, :3, -1] -= np.dot(Jtr[chain], rot.T)
 
     return bone_transforms_02v
+
+def save_verts(vertices, smpl_out_dir, idx):
+    if isinstance(vertices, torch.Tensor):
+        if vertices.dims()==3:
+            vertices = vertices.squeeze(0)
+        vertices = vertices.detach().cpu().numpy()
+    mesh = trimesh.Trimesh(vertices=vertices)
+    if not os.path.exists(smpl_out_dir):
+        os.makedirs(smpl_out_dir)
+    if isinstance(idx, int):
+        out_filename = os.path.join(smpl_out_dir,'{:06d}.ply'.format(idx))
+    else:
+        out_filename = os.path.join(smpl_out_dir,'{}.ply'.format(idx))
+    mesh.export(out_filename)

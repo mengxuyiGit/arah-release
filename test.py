@@ -43,10 +43,12 @@ if  __name__ == '__main__':
     out_dir = cfg['training']['out_dir']
     batch_size = cfg['training']['batch_size']
 
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0' 
+
     # Overwrite configuration
     cfg['data']['test_views'] = args.test_views.split(',')
-    cfg['data']['dataset'] = 'zju_mocap_odp'
-    cfg['data']['path'] = 'data/odp'
+    # cfg['data']['dataset'] = 'zju_mocap_odp' # FIXME: why original repo use overwriting here?
+    # cfg['data']['path'] = 'data/odp'
     cfg['data']['test_subsampling_rate'] = args.subsampling_rate
     cfg['data']['test_start_frame'] = args.start_frame
     cfg['data']['test_end_frame'] = args.end_frame

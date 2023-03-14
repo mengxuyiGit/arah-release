@@ -3,6 +3,7 @@ from yaml import Loader
 
 from im2mesh import data
 from im2mesh import metaavatar_render
+from ipdb import set_trace as st
 
 method_dict = {
     'metaavatar_render': metaavatar_render,
@@ -89,6 +90,7 @@ def get_dataset(mode, cfg, view_split=None, subsampling_rate=None, start_frame=N
     '''
     method = cfg['method']
     dataset_type = cfg['data']['dataset']
+    print('dataset_type', dataset_type)
     dataset_folder = cfg['data']['path']
     use_aug = cfg['data']['use_aug']
     normalized_scale = cfg['data']['normalized_scale']
@@ -98,7 +100,6 @@ def get_dataset(mode, cfg, view_split=None, subsampling_rate=None, start_frame=N
         'val': cfg['data']['val_split'],
         'test': cfg['data']['test_split'],
     }
-
     split = splits[mode]
 
     if view_split is None:

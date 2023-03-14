@@ -8,6 +8,9 @@ import torch
 import torch.nn.functional as F
 import kornia.geometry.conversions as conversions
 import pytorch_lightning as pl
+import json
+
+from ipdb import set_trace as st
 
 from im2mesh.metaavatar_render.renderer.loss import IDHRLoss
 
@@ -110,6 +113,7 @@ class LightningModel(pl.LightningModule):
         super().__init__()
 
         self.model = model
+        # print(self.model)
         self.cfg = cfg
 
         rgb_weight = cfg['training']['rgb_weight']
@@ -136,6 +140,7 @@ class LightningModel(pl.LightningModule):
                                  perceptual_loss_fn=self.loss_fn_vgg)
 
         self.val_size = val_size
+        self.frames=[]
 
     def training_step(self, batch, batch_idx):
         ''' Performs a training step.
@@ -177,6 +182,7 @@ class LightningModel(pl.LightningModule):
         image_mask = batch.get('inputs.image_mask')
         output_rgb = model_outputs['rgb_values'].reshape(-1, 3)[:image_mask.sum(), :]
         pred_pixels = torch.zeros(1, img_height, img_width, 3, device=self.device, dtype=torch.float32)
+        # pred_pixels = torch.zeros(1, img_height, img_width, 3, device=self.device, dtype=torch.float32) # white bkgd
         pred_pixels.masked_scatter_(image_mask.view(1, img_height, img_width, 1), output_rgb)
         pred_pixels = pred_pixels.squeeze(0)
 
@@ -310,19 +316,29 @@ class LightningModel(pl.LightningModule):
             batch (dict): data dictionary
             batch_idx (dict): index of the data
         '''
-
+       
         inputs = self.compose_inputs(batch, eval=True)
+        # FIXME: to render star pose in full, assume no mask
+        inputs['image_mask'] = torch.ones_like(inputs['image_mask'], dtype=torch.bool)
+        # st()
 
         img_height = batch['inputs.img_height'].item()
         img_width = batch['inputs.img_width'].item()
+        
+        
 
         with torch.no_grad():
             model_outputs = self.model(inputs, gen_cano_mesh=True, eval=True)
 
         # Save predicted image
         image_mask = batch.get('inputs.image_mask')
+        # check whether the mask is a preprocessed fg mask: no, its a bbox like region, not a human shape mask
         output_rgb = model_outputs['rgb_values'].reshape(-1, 3)[:image_mask.sum(), :]
-        pred_pixels = torch.zeros(1, img_height, img_width, 3, device=self.device, dtype=torch.float32)
+        # st()
+        # output_rgb = torch.ones_like(model_outputs['rgb_values'].reshape(-1, 3))[:image_mask.sum(), :] 
+        
+        # pred_pixels = torch.zeros(1, img_height, img_width, 3, device=self.device, dtype=torch.float32)
+        pred_pixels = torch.ones(1, img_height, img_width, 3, device=self.device, dtype=torch.float32) # white bkgd
         pred_pixels.masked_scatter_(image_mask.view(1, img_height, img_width, 1), output_rgb)
         pred_pixels = pred_pixels.squeeze(0)
 
@@ -337,6 +353,40 @@ class LightningModel(pl.LightningModule):
         eval_dict['normal_pred'] = pred_normals.permute(2, 0, 1)
         eval_dict['normal_front'] = pred_normals_front.permute(2, 0, 1)
         eval_dict['normal_back'] = pred_normals_back.permute(2, 0, 1)
+        
+        vis_dir = os.path.join(self.cfg['training']['out_dir'], 'vis_step_white_420')
+        if not os.path.exists(vis_dir):
+            # print("exist")
+            # shutil.rmtree(vis_dir)
+        # else:
+            # print("not exist")
+            os.makedirs(vis_dir)
+        rgb = (eval_dict['rgb_pred'].permute(1, 2, 0).detach().cpu().numpy() * 255.0).astype(np.uint8)
+        img_name = os.path.join(vis_dir, "rgb_{:06d}.png".format(batch_idx))
+        imageio.imwrite(img_name, rgb)
+
+        save_transformation_json = True
+        if save_transformation_json:
+            R,T = batch['image.R'], batch['image.T']
+            real_extr = torch.eye(4)
+            real_extr[:3,:3] = R[0]
+            real_extr[:3, 3] = T[0]
+            real_pose = torch.linalg.inv(real_extr)
+            # st()
+            self.frames.append({
+                'file_path': img_name,
+                'transform_matrix': real_pose.tolist(),
+            })
+        if batch_idx==419:
+            split='all'
+            meta={'frames': self.frames,}
+            path = os.path.join(vis_dir, f"transforms_{split}_{batch_idx}.json")
+            with open(path, "w") as outfile:
+                json.dump(meta, outfile)
+            print(f"transformations_{split} saved to {path}")
+        # imageio.imwrite(os.path.join(vis_dir, "normal_{:06d}.png".format(batch_idx)), normal)
+        # imageio.imwrite(os.path.join(vis_dir, "front_{:06d}.png".format(idx)), front)
+        # imageio.imwrite(os.path.join(vis_dir, "back_{:06d}.png".format(idx)), back)
 
         return eval_dict
 
@@ -472,6 +522,7 @@ class LightningModel(pl.LightningModule):
         cam_idx = data.get('inputs.cam_idx')
         if self.model.train_cameras and not eval:
             # Optimize camera extrinsics
+            print("\n# Optimize camera extrinsics")
             uv = data.get('inputs.uv')
 
             cam_rot = conversions.quaternion_to_rotation_matrix(self.model.cam_rots[cam_idx], order=conversions.QuaternionCoeffOrder.XYZW)
@@ -481,6 +532,7 @@ class LightningModel(pl.LightningModule):
             cam_loc = get_camera_location(cam_rot, cam_trans)
         else:
             # Use provided camera extrinsics
+            # print("\n# Use provided camera extrinsics") ## zju: this block
             ray_dirs = data.get('inputs.ray_dirs')
             cam_loc = data.get('image.cam_loc')
 
@@ -494,10 +546,13 @@ class LightningModel(pl.LightningModule):
         center = data.get('image.center').view(batch_size, 1, -1)
 
         f_idx = data.get('inputs.frame_idx')[0].item()
+        # print(f"f_idx:{f_idx}")
         novel_seq = data.get('inputs.novel_seq')
         if novel_seq is not None:
-            f_idx = -1
+            f_idx = -1 # test.py: this block
 
+        # print(f"f_idx:{f_idx}") # test.py: -1
+        # print(self.model.frames) # test.py: []empty
         if self.model.train_smpl and f_idx in self.model.frames:
             # Optimize estimated SMPL parameters
             # Get current SMPL parameters from the model
@@ -545,6 +600,7 @@ class LightningModel(pl.LightningModule):
             rots_full = full_pose_mat.unsqueeze(0)
         else:
             # Use provided SMPL parameters
+            # print("zju this block") # yes
             minimal_shape = data.get('image.minimal_shape')
             rots = data.get('image.rots')
             Jtrs = data.get('image.Jtrs')
@@ -555,6 +611,19 @@ class LightningModel(pl.LightningModule):
 
             coord_min = data.get('image.coord_min').view(batch_size, 1, -1)
             coord_max = data.get('image.coord_max').view(batch_size, 1, -1)
+            
+            # rgb_star_pose = True
+            # if rgb_star_pose:
+            #     coord_max = minimal_shape_v_centered.max().view(1, 1, -1).repeat(batch_size, 1, 1)
+            #     coord_min = minimal_shape_v_centered.min().view(1, 1, -1).repeat(batch_size, 1, 1)
+            #     neg4 = np.asarray([
+            #         [1., 0., 0., 0.],
+            #         [0., 0., -1., 0.],
+            #         [0., -1., 0., 0.],
+            #         [0., 0., 0., 1.]
+            #     ])
+            #     bone_transforms = np.matmul(neg4, bone_transforms_02v)
+            #     st()
             center = data.get('image.center').view(batch_size, 1, -1)
 
             bone_transforms = data.get('image.bone_transforms')
@@ -569,36 +638,42 @@ class LightningModel(pl.LightningModule):
                           F.pad(cam_trans, pad=(0, 1), value=1).unsqueeze(-1)],
                          dim=-1)    # camera pose
 
-        pose_cond = {'rots_full': rots_full, 'Jtrs_posed': Jtrs_posed}
-        if self.model.train_latent_code:
+        pose_cond = {'rots_full': rots_full, 'Jtrs_posed': Jtrs_posed} # [1, 24, 9], [1, 24, 3]
+   
+        if self.model.train_latent_code: # zju: this block
             if f_idx in self.model.frames:
                 d_idx = data.get('inputs.data_idx')[:1]
             else:
+                # zju this block
                 d_idx = torch.tensor([self.model.latent.num_embeddings - 1], dtype=torch.int64, device=self.device)
+                # self.model.latent.num_embeddings = 500
 
-            pose_cond.update({'latent_code_idx': d_idx})
+            pose_cond.update({'latent_code_idx': d_idx}) # tensor([499], device='cuda:0'), same for every d_idx
+        
+        if d_idx.item()!=499:
+            st() # test.py: always [499]
 
         inputs = {'intrinsics': cam_intri,
-                  'ray_dirs': ray_dirs,
-                  'body_bounds_intersections': body_bounds_intersections,
-                  'cam_loc': cam_loc,
-                  'cam_rot': cam_rot,
-                  'cam_trans': cam_trans,
-                  'pose': pose,
-                  'body_mask': fg_mask,
-                  'smpl_verts': smpl_verts,
-                  'skinning_weights': skinning_weights,
-                  'bone_transforms': bone_transforms,
-                  'trans': trans,
-                  'coord_min': coord_min,
-                  'coord_max': coord_max,
-                  'center': center,
-                  'minimal_shape': minimal_shape,
-                  'pose_cond': pose_cond,
-                  'Jtrs': Jtrs,
-                  'rots': rots,
-                  'cam_idx': cam_idx,
-                 }
+                'ray_dirs': ray_dirs,
+                'body_bounds_intersections': body_bounds_intersections,
+                'cam_loc': cam_loc,
+                'cam_rot': cam_rot,
+                'cam_trans': cam_trans,
+                'pose': pose, # camera pose
+                'body_mask': fg_mask,
+                'smpl_verts': smpl_verts,
+                'skinning_weights': skinning_weights,
+                'bone_transforms': bone_transforms,
+                'trans': trans,
+                'coord_min': coord_min,
+                'coord_max': coord_max,
+                'center': center,
+                'minimal_shape': minimal_shape,
+                'pose_cond': pose_cond, # rots_full, 'Jtrs_posed', [499]
+                'Jtrs': Jtrs,
+                'rots': rots,
+                'cam_idx': cam_idx,
+                }
 
         if self.model.train_geo_latent_code:
             if f_idx in self.model.frames:
@@ -609,6 +684,7 @@ class LightningModel(pl.LightningModule):
             inputs.update({'geo_latent_code_idx': d_idx})
 
         if not eval:
+            print('not eval')
             rgb_values = data.get('inputs')
             inputs['rgb_values'] = rgb_values
 

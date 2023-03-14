@@ -14,8 +14,10 @@ from im2mesh.utils.root_finding_utils import (
     unnormalize_canonical_points,
     normalize_canonical_points
 )
+from im2mesh.utils.utils_cam import save_verts
 
 from pytorch3d.structures import Meshes, Pointclouds
+from ipdb import set_trace as st
 
 class IDHRNetwork(nn.Module):
     ''' Implicit Differentiable Human Renderer (IDHR) class.
@@ -74,6 +76,7 @@ class IDHRNetwork(nn.Module):
         minimal_shape = input["minimal_shape"]
         sdf_network = input["sdf_network"]
         pose_cond = input["pose_cond"]
+        # st()
 
         if self.training:
             points_uniform = input["points_uniform"].reshape(-1, 3)
@@ -116,7 +119,8 @@ class IDHRNetwork(nn.Module):
 
         sdf_network.train()
 
-        points_bar = (cam_loc.unsqueeze(1) + dists.reshape(batch_size, num_pixels, 1) * ray_dirs) - trans
+        points_bar = (cam_loc.unsqueeze(1) + dists.reshape(batch_size, num_pixels, 1) * ray_dirs) - trans # this 'trans' is the global trans of the people
+        # print("points_bar")
         points_cam = torch.matmul(points_bar + trans, pose[:, :3, :3].transpose(1, 2)) + pose[:, :3, -1].unsqueeze(1)
 
         if self.training:
@@ -147,7 +151,13 @@ class IDHRNetwork(nn.Module):
             valid_mask = (points_hat_norm.abs() <= 1.0).all(-1)
             surface_mask = network_body_mask & valid_mask
 
-        rgb_values = torch.zeros_like(points_hat_norm)
+        render_white_bg = True
+        if render_white_bg and not self.training:
+            # print("render_white_bg")
+            rgb_values = torch.ones_like(points_hat_norm) # white bg to train mobilenerf
+        else:
+            rgb_values = torch.zeros_like(points_hat_norm) # black bg
+            
 
         # Conduct SDF-based volume rendering
         vol_mask = sampler_converge_mask.any(-1)   # we render any ray that has at least 1 valid point
@@ -204,7 +214,6 @@ class IDHRNetwork(nn.Module):
 
             rgb_values_vol = []
             ws_vol = []
-
             for pi, di, ti, mi,ri in zip(p_split, d_split, t_split, m_split, r_split):
                 rgb_i, w_i = self.get_rbg_value_vol_sdf(sdf_network,
                                                         pi,
@@ -332,12 +341,14 @@ class IDHRNetwork(nn.Module):
                                                      mask=None,
                                                      point_batch_size=point_batch_size
                                                     )
-
+                
                     jacobian_lbs, status = jacobian(points_lbs, pi)
                     jacobian_lbs_inv = jacobian_lbs.inverse().detach()
 
                     pi = pi - torch.matmul( jacobian_lbs_inv, (points_lbs - points_lbs.clone().detach()).unsqueeze(-1) ).squeeze(-1)
-
+                # st()
+                # save_verts(center.squeeze(1).detach().cpu().numpy(), './', 'center_lbs')
+                # exit(0)
                 feature_vectors = sdf_network[:-1](pi).squeeze(0)
                 sdf = sdf_network[-1](feature_vectors)
                 normal = gradient(sdf, pi) if self.training else gradient(sdf, pi, create_graph=False)
@@ -376,6 +387,7 @@ class IDHRNetwork(nn.Module):
         density = torch.zeros(n_pts, n_samples, dtype=torch.float32, device=device)
         new_z_vals = 1e10 * torch.ones(n_pts, n_samples, dtype=torch.float32, device=device)
 
+       
         rgb_vals.masked_scatter_(scatter_mask.unsqueeze(-1), valid_rgb)
         density.masked_scatter_(scatter_mask, valid_density)
         new_z_vals.masked_scatter_(scatter_mask, z_vals[converge_mask])
@@ -396,6 +408,13 @@ class IDHRNetwork(nn.Module):
 
         weights_sum = (weights * scatter_mask).sum(dim=-1, keepdim=True).clip(0, 1)
 
+        # st()
         rgb_vals = ((rgb_vals * weights.unsqueeze(-1)) * scatter_mask.unsqueeze(-1)).sum(dim=1)
+
+        white_bkgd = True
+        if white_bkgd:
+            acc_vals = (weights.unsqueeze(-1)* scatter_mask.unsqueeze(-1)).sum(dim=1)
+            rgb_vals = rgb_vals + (1. - acc_vals)
+        # images = (images[..., :3] * images[..., -1:] + (1. - images[..., -1:]))
 
         return rgb_vals, weights_sum

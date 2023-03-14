@@ -10,9 +10,11 @@ from im2mesh.utils.root_finding_utils import (
     normalize_canonical_points, unnormalize_canonical_points
 )
 
-from im2mesh.utils.utils import augm_rots
+from im2mesh.utils.utils import augm_rots, save_verts
 
 from human_body_prior.body_model.lbs import lbs
+
+from ipdb import set_trace as st
 
 class MetaAvatarRender(nn.Module):
     ''' MetaAvatar model class.
@@ -182,6 +184,7 @@ class MetaAvatarRender(nn.Module):
         coord_min = inputs['coord_min']
         coord_max = inputs['coord_max']
         center = inputs['center']
+        # print("center in metaAvatar:", center)
 
         vol_feat = torch.empty(batch_size, 0, device=device)
         loc = torch.zeros(batch_size, 1, 3, device=device, dtype=torch.float32)
@@ -198,9 +201,13 @@ class MetaAvatarRender(nn.Module):
             inputs['pose_cond']['latent_code'] = latent_code
 
         model_outputs = self.idhr_network(inputs)
+        # st()
+        # model_outputs['rgb_copy'] = model_outputs.pop('rgb_values')
+        # print(model_outputs.keys(), '\n', inputs.keys())
+        
         model_outputs.update({'sdf_params': sdf_params})
 
-        if gen_cano_mesh:
+        if gen_cano_mesh: # this block only can control whether the normal are star-pose or not. To control the             , need to modify the inputs before "self.idhr_network"
             with torch.no_grad():
                 verts, faces = sdf_meshing.create_mesh_vertices_and_faces(sdf_decoder, N=256,
                                                                           max_batch=64 ** 3)
@@ -227,6 +234,8 @@ class MetaAvatarRender(nn.Module):
 
                 points_bar = points_lbs + inputs['trans']
                 verts_posed = points_bar.squeeze(0).detach().cpu().numpy()
+                # save_verts(verts_posed, './', 'points_bar')
+                # exit(0)
                 # import trimesh
                 # posed_mesh = trimesh.Trimesh(vertices=verts_posed, faces=faces)
 
@@ -241,9 +250,21 @@ class MetaAvatarRender(nn.Module):
                     MeshRasterizer,
                     TexturesVertex
                 )
+                # from pytorch3d.io import save_obj
+                import pytorch3d.io as pio
 
                 faces_torch = torch.tensor(faces.copy(), dtype=torch.int64, device=device).unsqueeze(0)
                 mesh_bar = Meshes(verts=points_bar, faces=faces_torch)
+                # st()
+                # print("Mesh_bar.mean", points_bar.mean(1))
+                # # save mesh: this is body-posed mesh
+                # pio.save_obj(f'minimal_shape/mesh_star.obj',points_bar[0], faces_torch[0]) 
+                # print("Saved mesh_bar")
+                # exit(0)
+                # # save mesh: this is body-posed mesh without global "trans"
+                # pio.save_obj(f'minimal_shape/mesh_lbs.obj',points_lbs[0], faces_torch[0]) 
+                # print("Saved mesh_lbs")
+                # exit(0)
 
                 # TODO: image size here should be changable
                 raster_settings = RasterizationSettings(
@@ -253,9 +274,17 @@ class MetaAvatarRender(nn.Module):
                 cam_rot = inputs['cam_rot']
                 cam_trans = inputs['cam_trans']
                 K = inputs['intrinsics']
+                # print(f"in MetaAvatar R,T{cam_rot, cam_trans}\n")
 
                 image_size = torch.tensor([[512, 512]], dtype=torch.float32, device=device)
                 cameras = cameras_from_opencv_projection(cam_rot, cam_trans, K, image_size).to(device)
+                
+                # rgb_star_pose = True
+                # if rgb_star_pose:
+                #     # print('rgb_star_pose = True')
+                #     R, T = look_at_view_transform(2.0, 0.0, 0)#look_at_view_transform(0.0, 2.0, 0) 
+                #     cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
+                #     print(f"in MetaAvatar [rgb_star_pose = True] R,T{R, T}\n")
 
                 rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
                 rendered = rasterizer(mesh_bar)
@@ -302,6 +331,10 @@ class MetaAvatarRender(nn.Module):
                 verts_torch = torch.tensor(verts.copy(), dtype=torch.float32, device=device).unsqueeze(0)
                 faces_torch = torch.tensor(faces.copy(), dtype=torch.float32, device=device).unsqueeze(0)
                 mesh = Meshes(verts_torch, faces_torch)
+                # # save mesh: this is star-pose mesh!!!!
+                # pio.save_obj(f'minimal_shape/mesh.obj',verts_torch[0], faces_torch[0]) 
+                # print("Saved mesh")
+                # exit(0)
 
                 rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
                 rendered = rasterizer(mesh)
@@ -309,13 +342,16 @@ class MetaAvatarRender(nn.Module):
                 fg_mask = rendered.pix_to_face >= 0
                 fg_faces = rendered.pix_to_face[fg_mask]
                 faces_normals = mesh.faces_normals_packed().squeeze(0)
-                normal_image = torch.zeros(1, 512, 512, 3, dtype=torch.float32, device=device)
+                # normal_image = torch.zeros(1, 512, 512, 3, dtype=torch.float32, device=device)
+                normal_image = torch.ones(1, 512, 512, 3, dtype=torch.float32, device=device)
                 normal_image.masked_scatter_(fg_mask, faces_normals[fg_faces, :])
 
                 normal_image = ((normal_image + 1) / 2.0).clip(0.0, 1.0)
                 model_outputs.update({'normal_cano_back': normal_image})
                 # model_outputs.update({'posed_mesh': posed_mesh})
                 # model_outputs.update({'refined_smpl': smpl_mesh})
+        # st()
+        # print(model_outputs.keys(),'\n')
 
         return model_outputs
 

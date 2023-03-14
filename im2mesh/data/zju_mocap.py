@@ -14,8 +14,12 @@ from torch.utils import data
 from scipy.spatial.transform import Rotation
 
 from im2mesh.utils.libmesh import check_mesh_contains
-from im2mesh.utils.utils import get_bound_2d_mask, get_near_far, get_02v_bone_transforms
+from im2mesh.utils.utils import get_bound_2d_mask, get_near_far, get_02v_bone_transforms, save_verts
 from .imutils import crop_new
+from im2mesh.utils.utils_cam import rotate_camera_by_frame_idx
+
+from ipdb import set_trace as st
+from pytorch3d.renderer import look_at_view_transform
 
 class ZJUMOCAPDataset(data.Dataset):
     ''' ZJU MoCap dataset class.
@@ -76,6 +80,8 @@ class ZJUMOCAPDataset(data.Dataset):
         self.skinning_weights = dict(np.load('body_models/misc/skinning_weights_all.npz'))
         self.posedirs = dict(np.load('body_models/misc/posedirs_all.npz'))
         self.J_regressor = dict(np.load('body_models/misc/J_regressors.npz'))
+        
+        self.all_cam_lookat_ray=[]
 
         # img_size = (1024, 1024) if self.mode == 'train' else (512, 512)
         if isinstance(img_size, numbers.Number):
@@ -148,6 +154,8 @@ class ZJUMOCAPDataset(data.Dataset):
                              'mask_file': mask_file,
                              'model_file': model_file}
                         )
+      
+        self.data = self.data * 20
 
     def unnormalize_canonical_points(self, pts, coord_min, coord_max, center):
         padding = (coord_max - coord_min) * 0.05
@@ -201,6 +209,7 @@ class ZJUMOCAPDataset(data.Dataset):
     def get_camera_location(self, R, t):
         cam_loc = np.dot(-R.T, t)
         return cam_loc
+        # return t
 
     def get_camera_rays(self, R, homo_2d):
         rays = np.dot(homo_2d, R) # (H*W, 3)
@@ -239,6 +248,8 @@ class ZJUMOCAPDataset(data.Dataset):
         data_idx = self.data[idx]['data_idx']
         gender = self.data[idx]['gender']
         data = {}
+        # print("cam_name:", cam_name) # all the frames will share the same cam_name!!! thus cam params remains the same 
+        
 
         # No image augmentation is used; just feed default parameters to the image cropping function
         flip = False            # flipping
@@ -251,18 +262,75 @@ class ZJUMOCAPDataset(data.Dataset):
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         mask_erode = self.get_mask(mask)
 
+        
         K = np.array(self.cameras[cam_name]['K'], dtype=np.float32)
         dist = np.array(self.cameras[cam_name]['D'], dtype=np.float32).ravel()
         R = np.array(self.cameras[cam_name]['R'], np.float32)
         cam_trans = np.array(self.cameras[cam_name]['T'], np.float32).ravel()
-
+        
+        ################################################################
+        rotate_camera = True
+        # print(f"ori R:{R}, ori cam_trans:{cam_trans}\n")
+        
+        if rotate_camera:
+            r_dtype, t_dtype = R.dtype, cam_trans.dtype
+            original_pose_np = np.concatenate((
+                np.pad(R, pad_width=((0, 1),(0, 0))),
+                np.pad(cam_trans, pad_width=(0, 1), constant_values=1)[...,None]
+            ), axis=-1)
+            original_extrinsics = np.linalg.inv(original_pose_np)
+            model_dict = np.load(data_path)
+            trans_tmp = model_dict['trans'].astype(np.float32)
+            R, cam_trans, cam_lookat_ray = rotate_camera_by_frame_idx(original_extrinsics ,idx, trans=trans_tmp, rotate_axis='z', inv_angle=True)
+            R, cam_trans = R.astype(np.float32), cam_trans.astype(np.float32)
+            
+            # print(idx,'\n')
+            # self.all_cam_lookat_ray.append(cam_lookat_ray)
+            # if idx==9:      
+            #     all_cam_lookat_ray = np.row_stack(self.all_cam_lookat_ray).squeeze(1)
+            #     print("all_cam_lookat_ray.shape",all_cam_lookat_ray.shape)
+            #     save_verts(all_cam_lookat_ray, './', 'all_cam_look_at_rays_0')
+            #     exit(0)
+            # print(f"Updated R,T by rotation in index {idx}: {R,cam_trans}\n")
+        # else:
+        #     # st()
+        #     R, cam_trans =look_at_view_transform(2.0, 0.0, 0)#look_at_view_transform(0.0, 2, 0)
+        #     R = R.squeeze(0).detach().cpu().numpy().astype(np.float32)
+        #     cam_trans = cam_trans.squeeze(0).detach().cpu().numpy().astype(np.float32)
+            
+        #     # R = np.eye(3).astype(np.float32)
+        #     # cam_trans = np.asarray([2.0, 0.2 , -0.2 ]).astype(np.float32)
+        #     print(f"Updated R,T by FOV: {R,cam_trans}\n")
+            
+        ############# This Block Must be before the cam_loc calculation!!! ###########################
         cam_loc = self.get_camera_location(R, cam_trans)
+        
+        if False:
+            # write all cam_locations into a file
+            outfile = os.path.join('minimal_shape','original_cam_locs.npy')
+            with open(outfile,'ab') as f:
+                # print(cam_loc)
+                np.save(f, cam_loc)
+            if idx == 100:
+                all_cams = []
+                try:
+                    with open(outfile, 'rb') as f:
+                        while(True):
+                            all_cams.append(np.load(f))
+                except:
+                    print('finish loading')
+                    print(np.stack(all_cams).shape)
+                    save_verts(all_cams, os.path.join('minimal_shape', 'all_cam_locs'), idx)
+                    exit(0)
+                    
+        #################################################################
 
         image = cv2.undistort(image, K, dist, None)
         mask = cv2.undistort(mask, K, dist, None)
         mask_erode = cv2.undistort(mask_erode, K, dist, None)
 
-        model_dict = np.load(data_path)
+        if not rotate_camera:
+            model_dict = np.load(data_path)
 
         # TODO: center_img and scale_img should be changable according image size
         center_img = np.array([512.0, 512.0], dtype=np.float32)
@@ -288,6 +356,8 @@ class ZJUMOCAPDataset(data.Dataset):
 
         # 3D models and points
         trans = model_dict['trans'].astype(np.float32)
+        # trans[:]=0
+        # print("trans",trans)
         minimal_shape = model_dict['minimal_shape']
         # Break symmetry if given in float16:
         if minimal_shape.dtype == np.float16:
@@ -342,6 +412,25 @@ class ZJUMOCAPDataset(data.Dataset):
         homogen_coord = np.ones([n_smpl_points, 1], dtype=np.float32)
         a_pose_homo = np.concatenate([minimal_shape, homogen_coord], axis=-1).reshape([n_smpl_points, 4, 1])
         minimal_body_vertices = (np.matmul(T, a_pose_homo)[:, :3, 0].astype(np.float32) + trans).astype(np.float32)
+        # save_verts(minimal_body_vertices, './', 'minimal_body_vertices')
+        # exit(0)
+        # ########################################################
+        # mesh = trimesh.Trimesh(vertices=minimal_body_vertices)
+        # smpl_out_dir = os.path.join('minimal_shape', 'minimal_trans')
+        # if not os.path.exists(smpl_out_dir):
+        #     os.makedirs(smpl_out_dir)
+        # out_filename = os.path.join(smpl_out_dir,'{:06d}.ply'.format(idx))
+        # mesh.export(out_filename)
+        # # no trans: centered at (0,0,0)
+        # minimal_body_vertices_no_trans = (np.matmul(T, a_pose_homo)[:, :3, 0].astype(np.float32)).astype(np.float32)
+        # mesh = trimesh.Trimesh(vertices=minimal_body_vertices_no_trans)
+        # smpl_out_dir = os.path.join('minimal_shape', 'minimal_no_trans')
+        # if not os.path.exists(smpl_out_dir):
+        #     os.makedirs(smpl_out_dir)
+        # out_filename = os.path.join(smpl_out_dir,'{:06d}.ply'.format(idx))
+        # mesh.export(out_filename)
+        # exit(0)
+        # #######################################################
 
         fg_sample_mask = mask_erode_crop == 1
         bg_sample_mask = mask_erode_crop == 0
@@ -379,6 +468,8 @@ class ZJUMOCAPDataset(data.Dataset):
                 bg_inds = np.random.choice(x_inds.shape[0], size=self.num_bg_samples + 1024, replace=False)
                 y_inds, x_inds = y_inds[bg_inds], x_inds[bg_inds]
                 bg_pixels = np.zeros([x_inds.shape[0], 3], dtype=np.float32)
+                # st() # this is training: to be consistent with gt, should use black bg
+                # bg_pixels = np.ones([x_inds.shape[0], 3], dtype=np.float32)*255
                 bg_mask = mask_crop[y_inds, x_inds].copy()
                 bg_mask_erode = mask_erode_crop[y_inds, x_inds].copy()
                 bg_uv = np.dot(self.homo_2d.copy()[y_inds, x_inds].reshape([-1, 3]), K_inv.T)
@@ -389,6 +480,7 @@ class ZJUMOCAPDataset(data.Dataset):
                 sampled_uv = np.concatenate([fg_uv, bg_uv], axis=0)
                 sampled_rays_cam = self.normalize_vectors(sampled_uv)
                 sampled_rays = self.get_camera_rays(R, sampled_uv)
+                # st()
 
                 near, far, mask_at_box = get_near_far(bounds, np.broadcast_to(cam_loc, sampled_rays.shape), sampled_rays)
 
@@ -431,11 +523,13 @@ class ZJUMOCAPDataset(data.Dataset):
             sampled_mask_erode = np.ones(sampled_pixels.shape[0], dtype=bool)
             sampled_bg_mask = bg_sample_mask[y_inds, x_inds].copy()
             sampled_pixels[sampled_bg_mask] = 0
+            # sampled_pixels[sampled_bg_mask] = 255
             sampled_uv = np.dot(self.homo_2d.copy()[y_inds, x_inds].reshape([-1, 3]), K_inv.T)
             sampled_rays_cam = self.normalize_vectors(sampled_uv)
             sampled_rays = self.get_camera_rays(R, sampled_uv)
 
             near, far, mask_at_box = get_near_far(bounds, np.broadcast_to(cam_loc, sampled_rays.shape), sampled_rays)
+            # st()
 
             sampled_pixels = sampled_pixels[mask_at_box, ...]
             sampled_mask = sampled_mask[mask_at_box, ...]
@@ -459,6 +553,8 @@ class ZJUMOCAPDataset(data.Dataset):
 
         # Normalize conanical pose points with GT full-body scales.
         center = np.mean(minimal_shape_v, axis=0)
+        # save_verts(minimal_shape_v, './', 'minimal_shape_v')
+        # st()
         minimal_shape_v_centered = minimal_shape_v - center
         coord_max = minimal_shape_v_centered.max()
         coord_min = minimal_shape_v_centered.min()
@@ -588,6 +684,7 @@ class ZJUMOCAPDataset(data.Dataset):
             'cam_loc': cam_loc,
             'points_uniform': points_uniform.astype(np.float32),
         }
+
 
         if self.sample_inside:
             data.update({'points_inside': inside_points.astype(np.float32)})
