@@ -11,6 +11,7 @@ from im2mesh.metaavatar_render.models.decoder import RenderingNetwork, SingleVar
 from im2mesh.metaavatar_render.models.skinning_model import SkinningModel
 
 from collections import OrderedDict
+from ipdb import set_trace as st
 
 import logging
 logger = logging.getLogger(__name__)

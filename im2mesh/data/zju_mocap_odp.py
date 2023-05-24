@@ -7,6 +7,7 @@ import json
 # import logging
 import trimesh
 import numbers
+from ipdb import set_trace as st
 
 import igl
 
@@ -242,6 +243,8 @@ class ZJUMOCAPODPDataset(data.Dataset):
 
         n_smpl_points = minimal_shape.shape[0]
         bone_transforms = model_dict['bone_transforms'].astype(np.float32)
+        st() # 1. check model_dict 2. check bone_transforms.shape
+        
         # Also get GT SMPL poses
         root_orient = model_dict['root_orient'].astype(np.float32)
         pose_body = model_dict['pose_body'].astype(np.float32)

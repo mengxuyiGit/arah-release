@@ -71,6 +71,7 @@ def _update_extrinsics_with_chatGPT(extrinsics, target_location, frame_idx, view
     cam_to_target = np.linalg.inv(extrinsics)[:3, 3]-target_location
     radius = (cam_to_target**2).sum()**0.5
     # print(f"Radius    :{radius}")
+    radius = radius*0.8
 
     position_noise = False
     

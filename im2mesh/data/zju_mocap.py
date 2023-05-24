@@ -155,7 +155,7 @@ class ZJUMOCAPDataset(data.Dataset):
                              'model_file': model_file}
                         )
       
-        self.data = self.data * 20
+        self.data = self.data * 42
 
     def unnormalize_canonical_points(self, pts, coord_min, coord_max, center):
         padding = (coord_max - coord_min) * 0.05
@@ -368,6 +368,7 @@ class ZJUMOCAPDataset(data.Dataset):
 
         n_smpl_points = minimal_shape.shape[0]
         bone_transforms = model_dict['bone_transforms'].astype(np.float32)
+        st()
         # Also get GT SMPL poses
         root_orient = model_dict['root_orient'].astype(np.float32)
         pose_body = model_dict['pose_body'].astype(np.float32)
@@ -412,7 +413,7 @@ class ZJUMOCAPDataset(data.Dataset):
         homogen_coord = np.ones([n_smpl_points, 1], dtype=np.float32)
         a_pose_homo = np.concatenate([minimal_shape, homogen_coord], axis=-1).reshape([n_smpl_points, 4, 1])
         minimal_body_vertices = (np.matmul(T, a_pose_homo)[:, :3, 0].astype(np.float32) + trans).astype(np.float32)
-        # save_verts(minimal_body_vertices, './', 'minimal_body_vertices')
+        # save_verts(minimal_body_vertices, './', 'minimal_body_vertices_dynamic')
         # exit(0)
         # ########################################################
         # mesh = trimesh.Trimesh(vertices=minimal_body_vertices)
@@ -553,7 +554,7 @@ class ZJUMOCAPDataset(data.Dataset):
 
         # Normalize conanical pose points with GT full-body scales.
         center = np.mean(minimal_shape_v, axis=0)
-        # save_verts(minimal_shape_v, './', 'minimal_shape_v')
+        # save_verts(minimal_shape, './', 'minimal_shape_star')
         # st()
         minimal_shape_v_centered = minimal_shape_v - center
         coord_max = minimal_shape_v_centered.max()

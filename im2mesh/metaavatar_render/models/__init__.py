@@ -11,6 +11,7 @@ from im2mesh.utils.root_finding_utils import (
 )
 
 from im2mesh.utils.utils import augm_rots, save_verts
+from im2mesh.utils.utils_mobile import load_obj_mesh, replace_obj_mesh_vertices
 
 from human_body_prior.body_model.lbs import lbs
 
@@ -219,6 +220,39 @@ class MetaAvatarRender(nn.Module):
                 )
                 points_hat = torch.tensor(verts, dtype=torch.float32, device=device).unsqueeze(0)
                 points_hat = unnormalize_canonical_points(points_hat, coord_min, coord_max, center)
+                
+                load_mobilenerf_mesh = False
+                if load_mobilenerf_mesh:
+                    mesh_path_w_face = '/data/xymeng/Repo/jax3d/jax3d/projects/mobilenerf/vis_step_white_bkgd_420_tue_obj/shape.obj'
+                    mobile_mesh, _ = load_obj_mesh(mesh_path_w_face)
+                    save_verts(mobile_mesh,'./', 'mobile_mesh')
+                    points_hat_mobile = torch.from_numpy(mobile_mesh).to(points_hat.device).type(points_hat.dtype).reshape(1, -1, 3)
+                    # - trans
+                    points_hat_mobile = points_hat_mobile - inputs['trans']
+                    # reverse yz
+                    # - can
+                    # backwarp to canonical
+                    # - ? backwarp weights
+                    # no need to unnormalize
+                    # st()
+                
+                    points_lbs_mobile, _ = forward_skinning(points_hat_mobile,
+                                                 loc=loc,
+                                                 sc_factor=sc_factor,
+                                                 coord_min=coord_min,
+                                                 coord_max=coord_max,
+                                                 center=center,
+                                                 skinning_model=self.skinning_model,
+                                                 vol_feat=vol_feat,
+                                                 bone_transforms=inputs['bone_transforms'],
+                                                 return_w=False
+                                                )
+                    
+                    mesh_path_replace = mesh_path_w_face.replace('.obj', '_driven_mesh_f2.obj')
+                    replace_obj_mesh_vertices(load_mesh_path=mesh_path_w_face, save_mesh_path=mesh_path_replace, new_vertices=points_lbs_mobile[0], reversed_yz=True)
+                    print(f"Replaced mesh to {mesh_path_replace}, of {points_lbs_mobile.shape} driven vertices")
+                    exit(0)
+
                 points_lbs, _ = forward_skinning(points_hat,
                                                  loc=loc,
                                                  sc_factor=sc_factor,
@@ -230,8 +264,7 @@ class MetaAvatarRender(nn.Module):
                                                  bone_transforms=inputs['bone_transforms'],
                                                  return_w=False
                                                 )
-
-
+                
                 points_bar = points_lbs + inputs['trans']
                 verts_posed = points_bar.squeeze(0).detach().cpu().numpy()
                 # save_verts(verts_posed, './', 'points_bar')
